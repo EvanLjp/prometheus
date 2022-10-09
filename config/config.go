@@ -402,6 +402,7 @@ func (c *GlobalConfig) isZero() bool {
 }
 
 // ScrapeConfig configures a scraping unit for Prometheus.
+// 基础的抓取配置, 所有代码的入口
 type ScrapeConfig struct {
 	// The job name to which the job label is set by default.
 	JobName string `yaml:"job_name"`

@@ -37,6 +37,7 @@ import (
 var targetMetadataCache = newMetadataMetricsCollector()
 
 // MetadataMetricsCollector is a Custom Collector for the metadata cache metrics.
+// Prometheus 的自身抓取遥测
 type MetadataMetricsCollector struct {
 	CacheEntries *prometheus.Desc
 	CacheBytes   *prometheus.Desc
@@ -101,6 +102,7 @@ func (mc *MetadataMetricsCollector) Collect(ch chan<- prometheus.Metric) {
 }
 
 // NewManager is the Manager constructor
+// 所有抓取任务的拉取者
 func NewManager(o *Options, logger log.Logger, app storage.Appendable) *Manager {
 	if o == nil {
 		o = &Options{}
@@ -144,7 +146,7 @@ type Options struct {
 type Manager struct {
 	opts      *Options
 	logger    log.Logger
-	append    storage.Appendable
+	append    storage.Appendable // TSDB
 	graceShut chan struct{}
 
 	jitterSeed    uint64     // Global jitterSeed seed is used to spread scrape workload across HA setup.
@@ -158,6 +160,7 @@ type Manager struct {
 
 // Run receives and saves target set updates and triggers the scraping loops reloading.
 // Reloading happens in the background so that it doesn't block receiving targets updates.
+// Manager 的入口，接收Discovery 发送来的配置信息，之后进行更新一集Reload
 func (m *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) error {
 	go m.reloader()
 	for {
@@ -176,6 +179,7 @@ func (m *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) error {
 	}
 }
 
+// 定时Reload
 func (m *Manager) reloader() {
 	reloadIntervalDuration := m.opts.DiscoveryReloadInterval
 	if reloadIntervalDuration < model.Duration(5*time.Second) {
@@ -263,6 +267,7 @@ func (m *Manager) updateTsets(tsets map[string][]*targetgroup.Group) {
 }
 
 // ApplyConfig resets the manager's target providers and job configurations as defined by the new cfg.
+// 启动时候首先调用，类似于初始化
 func (m *Manager) ApplyConfig(cfg *config.Config) error {
 	m.mtxScrape.Lock()
 	defer m.mtxScrape.Unlock()
@@ -278,6 +283,7 @@ func (m *Manager) ApplyConfig(cfg *config.Config) error {
 	}
 
 	// Cleanup and reload pool if the configuration has changed.
+	// 和ilogtail 的加载类型，仅仅不同时候load。
 	var failed bool
 	for name, sp := range m.scrapePools {
 		if cfg, ok := m.scrapeConfigs[name]; !ok {

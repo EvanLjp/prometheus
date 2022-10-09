@@ -45,8 +45,11 @@ package chunkenc
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 	"math/bits"
+
+	"github.com/prometheus/prometheus/tsdb/debug"
 )
 
 const (
@@ -148,6 +151,9 @@ type xorAppender struct {
 }
 
 func (a *xorAppender) Append(t int64, v float64) {
+	debug.LOG("=============new append t & v============")
+	debug.LOG(fmt.Sprintf("data: %d %f", t, v))
+	defer debug.LOG("=============end append t & v============")
 	var tDelta uint64
 	num := binary.BigEndian.Uint16(a.b.bytes())
 
@@ -157,6 +163,7 @@ func (a *xorAppender) Append(t int64, v float64) {
 			a.b.writeByte(b)
 		}
 		a.b.writeBits(math.Float64bits(v), 64)
+		debug.LOG(fmt.Sprintf("write origin t(varint) & v: %d,%f", t, v))
 
 	} else if num == 1 {
 		tDelta = uint64(t - a.t)
@@ -166,12 +173,12 @@ func (a *xorAppender) Append(t int64, v float64) {
 			a.b.writeByte(b)
 		}
 
+		debug.LOG(fmt.Sprintf("write delta t(varint) &  delta v: %d,%f", tDelta, v))
 		a.writeVDelta(v)
-
 	} else {
 		tDelta = uint64(t - a.t)
 		dod := int64(tDelta - a.tDelta)
-
+		debug.LOG(fmt.Sprintf("write delta of delta t(varint) &  delta v: %d,%f", dod, v))
 		// Gorilla has a max resolution of seconds, Prometheus milliseconds.
 		// Thus we use higher value range steps with larger bit size.
 		switch {
@@ -211,6 +218,7 @@ func (a *xorAppender) writeVDelta(v float64) {
 
 	if vDelta == 0 {
 		a.b.writeBit(zero)
+		debug.LOG(fmt.Sprintf("write delta v with 0"))
 		return
 	}
 	a.b.writeBit(one)
@@ -218,15 +226,19 @@ func (a *xorAppender) writeVDelta(v float64) {
 	leading := uint8(bits.LeadingZeros64(vDelta))
 	trailing := uint8(bits.TrailingZeros64(vDelta))
 
+	debug.LOG(fmt.Sprintf("leading zeros: %d trailing zeros:%d", leading, trailing))
+
 	// Clamp number of leading zeros to avoid overflow when encoding.
 	if leading >= 32 {
 		leading = 31
 	}
 
 	if a.leading != 0xff && leading >= a.leading && trailing >= a.trailing {
+		debug.LOG(fmt.Sprintf("write delta v with 10"))
 		a.b.writeBit(zero)
 		a.b.writeBits(vDelta>>a.trailing, 64-int(a.leading)-int(a.trailing))
 	} else {
+		debug.LOG(fmt.Sprintf("write delta v with 11"))
 		a.leading, a.trailing = leading, trailing
 
 		a.b.writeBit(one)
@@ -293,6 +305,8 @@ func (it *xorIterator) Reset(b []byte) {
 }
 
 func (it *xorIterator) Next() bool {
+	debug.LOG("========Next()==============")
+	defer debug.LOG("========End Next()==============")
 	if it.err != nil || it.numRead == it.numTotal {
 		return false
 	}
@@ -303,6 +317,7 @@ func (it *xorIterator) Next() bool {
 			it.err = err
 			return false
 		}
+
 		v, err := it.br.readBits(64)
 		if err != nil {
 			it.err = err
@@ -310,7 +325,7 @@ func (it *xorIterator) Next() bool {
 		}
 		it.t = t
 		it.val = math.Float64frombits(v)
-
+		debug.LOG(fmt.Sprintf("read original t(varint) & v: %d,%f", t, it.val))
 		it.numRead++
 		return true
 	}
@@ -321,11 +336,12 @@ func (it *xorIterator) Next() bool {
 			return false
 		}
 		it.tDelta = tDelta
+		debug.LOG(fmt.Sprintf("read delta t(varint), pre t, read t, : %d,%d,%d", tDelta, it.t, it.t+int64(it.tDelta)))
 		it.t = it.t + int64(it.tDelta)
-
 		return it.readValue()
 	}
 
+	debug.LOG("read delta of delta")
 	var d byte
 	// read delta-of-delta
 	for i := 0; i < 4; i++ {
@@ -343,6 +359,7 @@ func (it *xorIterator) Next() bool {
 		}
 		d |= 1
 	}
+	debug.LOG(fmt.Sprintf("detect max 4 bit to check dod mode, get mod: %b", d))
 	var sz uint8
 	var dod int64
 	switch d {
@@ -382,7 +399,7 @@ func (it *xorIterator) Next() bool {
 		}
 		dod = int64(bits)
 	}
-
+	debug.LOG(fmt.Sprintf("read dod t(varint), pre delta, real t, : %d,%d,%d", dod, int64(it.tDelta), it.t+int64(it.tDelta)+dod))
 	it.tDelta = uint64(int64(it.tDelta) + dod)
 	it.t = it.t + int64(it.tDelta)
 
@@ -400,6 +417,7 @@ func (it *xorIterator) readValue() bool {
 	}
 
 	if bit == zero {
+		debug.LOG("bit is 0, which means the val equals the previous one")
 		// it.val = it.val
 	} else {
 		bit, err := it.br.readBitFast()
@@ -411,6 +429,7 @@ func (it *xorIterator) readValue() bool {
 			return false
 		}
 		if bit == zero {
+			debug.LOG("bit is 10, which means the leading and trailing reusing the previous one")
 			// reuse leading/trailing zero bits
 			// it.leading, it.trailing = it.leading, it.trailing
 		} else {
@@ -438,6 +457,7 @@ func (it *xorIterator) readValue() bool {
 				mbits = 64
 			}
 			it.trailing = 64 - it.leading - mbits
+			debug.LOG(fmt.Sprintf("bit is 11, which means need to read real leading and trailing bits: %d(leading) %d(trailing)", it.leading, it.trailing))
 		}
 
 		mbits := 64 - it.leading - it.trailing
@@ -452,6 +472,7 @@ func (it *xorIterator) readValue() bool {
 		vbits := math.Float64bits(it.val)
 		vbits ^= bits << it.trailing
 		it.val = math.Float64frombits(vbits)
+		debug.LOG(fmt.Sprintf("read real val:%f", it.val))
 	}
 
 	it.numRead++

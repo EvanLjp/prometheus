@@ -47,6 +47,7 @@ import (
 )
 
 // bstream is a stream of bits.
+// bstream
 type bstream struct {
 	stream []byte // The data stream.
 	count  uint8  // How many right-most bits are available for writing in the current byte (the last byte of the stream).
